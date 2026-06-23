@@ -1,0 +1,23 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# GitHub Actions（构建镜像不需要 workflow 定义）
+.github/
+
+# 文档（镜像内不需要）
+*.md
+LICENSE
+
+# 本地下载/解压的临时产物
+/tmp/
+*extract/
+*.tar.gz
+
+# 本地编辑器/系统文件
+.DS_Store
+*.swp
+*.bak
+.idea/
+.vscode/

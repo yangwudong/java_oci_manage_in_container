@@ -1,0 +1,70 @@
+name: Check Upstream Release
+
+# 定时检查上游 semicons/java_oci_manage 是否有新 release。
+# 若有新版本（本仓库尚未打 upstream-vX tag），则调用 docker-publish.yml 触发构建。
+#
+# 触发：
+#   - schedule: 每周一 UTC 08:00（北京时间 16:00）
+#   - workflow_dispatch: 手动触发
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+env:
+  UPSTREAM_REPO: semicons/java_oci_manage
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      latest: ${{ steps.compare.outputs.latest }}
+      needs_build: ${{ steps.compare.outputs.needs_build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 需要全部 tag 才能比对
+
+      - name: Compare upstream vs built
+        id: compare
+        run: |
+          # 取上游最新 release tag
+          LATEST=$(curl -fsSL \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" \
+            | grep -m1 '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+          [ -z "${LATEST}" ] && { echo "无法获取上游最新版本" >&2; exit 1; }
+          case "${LATEST}" in v*) ;; *) LATEST="v${LATEST}" ;; esac
+
+          # 取本仓库最新已构建的 upstream-vX tag
+          BUILT=$(git tag -l 'upstream-v*' --sort=-version:refname | head -1)
+          # 去掉 upstream- 前缀得到纯版本号
+          BUILT_VER="${BUILT#upstream-}"
+
+          echo "上游最新: ${LATEST}"
+          echo "本仓库已构建: ${BUILT_VER:-（无）}"
+
+          if [ "${BUILT_VER}" != "${LATEST}" ]; then
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_build=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          echo "### 上游版本检查" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 上游最新: \`${{ steps.compare.outputs.latest }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 需要构建: ${{ steps.compare.outputs.needs_build }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # 有新版本时调用主构建 workflow（传确定的版本号，避免再次取 latest 造成竞态）
+  trigger-build:
+    needs: check
+    if: ${{ needs.check.outputs.needs_build == 'true' }}
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      upstream_version: ${{ needs.check.outputs.latest }}
+    secrets: inherit
