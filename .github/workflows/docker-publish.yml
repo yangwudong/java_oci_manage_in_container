@@ -107,15 +107,19 @@ jobs:
 
       # ----------------------------------------------------------------------
       # 6. 记录已构建的上游版本（打 upstream-vX tag），供 check-upstream.yml 比对。
-      #    若 tag 已存在则跳过，避免重复构建循环。
+      #    用 git ls-remote 检查【远程】是否已有该 tag（本地 checkout 可能不含上次
+      #    构建打的 tag，直接 rev-parse 会在 push 时撞远程已存在而失败）。
+      #    此步仅做版本记账，即使失败也不影响镜像推送结果。
       # ----------------------------------------------------------------------
       - name: Tag built version
+        continue-on-error: true
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           TAG="upstream-${VERSION}"
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
-            echo "Tag ${TAG} 已存在，跳过"
+          # 检查远程是否已存在该 tag
+          if git ls-remote --tags --exit-code origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "远程已存在 tag ${TAG}，跳过"
             exit 0
           fi
           git config user.name  "github-actions[bot]"
