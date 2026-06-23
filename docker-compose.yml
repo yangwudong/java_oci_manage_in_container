@@ -1,24 +1,32 @@
 # docker-compose 示例 — java_oci_manage (R-Bot 客户端)
 #
-# 用法：
-#   1. 把下方 ./rbot-data 改成你想要的宿主机持久化目录（群晖用绝对路径如 /volume1/docker/rbot）
-#   2. docker compose up -d
-#   3. 首次启动会在挂载目录生成 client_config，编辑填入配置后 docker compose restart
+# 挂载方式：整个宿主目录挂到 /app（推荐，比单文件挂载更省事）。
+# 二进制在 /opt/rbot（镜像内置），挂载盖不到它。
 #
-# 架构自动选择：amd64 机器拉 amd64（compatible 包，兼容无 AVX 的 Intel），
-#              arm64 机器拉 arm64，无需手动指定 platform。
+# 目录结构准备（在 compose 文件同级目录）：
+#   ./config/
+#   ├── client_config          # 你的配置文件
+#   └── <私钥>.pem             # OCI API 私钥（不是 .cer 公钥证书）
+#
+# client_config 里 key_file 写容器内路径，例如：
+#   key_file=/app/your-private-key.pem
+#
+# 用法：
+#   1. 按👆准备 ./config/ 目录
+#   2. docker compose up -d
+#   3. 首次启动会在 /app 生成 data/、.task/ 等，并打印登录凭据
 
 services:
-  rbot:
+  oracle_oci:
     image: yangwudong/java_oci_manage:latest
-    container_name: rbot
+    container_name: Oracle_OCI
     restart: unless-stopped
     ports:
-      - "9527:9527"          # 主机端口:容器端口。改左边即可，如 "8888:9527"
-    environment:
-      TZ: Asia/Shanghai      # 时区，影响日志和定时任务
-      # MODEL: local         # 默认 local（无公网IP模式）。留空 MODEL: 切回端口模式
-      # PORT: "9527"         # 改端口时容器端口也要同步，如 PORT: "8888" + "8888:8888"
+      - "9527:9527"
     volumes:
-      - ./rbot-data:/app     # 唯一持久化挂载点：配置/私钥/证书/任务全在这
-    # healthcheck 已内置在镜像，无需重复配置
+      # 挂整个目录：client_config + 私钥 + 运行时数据都在这里
+      - "./config:/app"
+    environment:
+      - TZ=Asia/Shanghai
+      # - MODEL=local   # 默认就是 local(无公网IP模式)。想用端口模式写 MODEL=(留空)
+    # healthcheck 已内置在镜像，群晖上会显示 healthy

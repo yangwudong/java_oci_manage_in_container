@@ -65,13 +65,24 @@ mkdir -p "${APP_DIR}/data" "${APP_DIR}/.task"
 #            其它/空=端口模式（需端口能被 bot 访问，适合公网/反代）
 #    PORT:   监听端口（默认 9527）
 #
-#    用 sed 原地修改 client_config 中以 model= 开头的行；
-#    若文件中没有该行（用户删过），则追加。
+#    注意：必须用"读全部 → shell 替换 → 回写"，不能用 sed -i。
+#    sed -i 会新建临时文件再 rename 覆盖，但当 client_config 作为
+#    【单文件 bind mount】时目标 inode 被 docker 绑定，rename 会报
+#    "Resource busy"（群晖/容器里尤其明显）。下面用 sed 生成新内容到
+#    临时文件、再 cat 回写原 inode（truncate+write，bind mount 允许），
+#    避免任何 rename。
 # ----------------------------------------------------------------------------
 if [ -n "${MODEL:-}" ]; then
-    if grep -q '^model=' "${CONFIG}"; then
-        # busybox sed -i 需要后跟空字符串
-        sed -i "s|^model=.*|model=${MODEL}|" "${CONFIG}"
+    if grep -q '^model=' "${CONFIG}" 2>/dev/null; then
+        tmpfile="${APP_DIR}/.client_config.tmp.$$"
+        if sed "s|^model=.*|model=${MODEL}|" "${CONFIG}" > "${tmpfile}" 2>/dev/null; then
+            # cat 回写：truncate + write 到同一 inode，对 bind mount 安全
+            cat "${tmpfile}" > "${CONFIG}"
+            rm -f "${tmpfile}"
+        else
+            rm -f "${tmpfile}"
+            echo "[entrypoint] 注意: MODEL 覆盖失败，沿用 client_config 内现有 model 值" >&2
+        fi
     else
         printf '\nmodel=%s\n' "${MODEL}" >> "${CONFIG}"
     fi
