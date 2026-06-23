@@ -1,0 +1,24 @@
+# docker-compose 示例 — java_oci_manage (R-Bot 客户端)
+#
+# 用法：
+#   1. 把下方 ./rbot-data 改成你想要的宿主机持久化目录（群晖用绝对路径如 /volume1/docker/rbot）
+#   2. docker compose up -d
+#   3. 首次启动会在挂载目录生成 client_config，编辑填入配置后 docker compose restart
+#
+# 架构自动选择：amd64 机器拉 amd64（compatible 包，兼容无 AVX 的 Intel），
+#              arm64 机器拉 arm64，无需手动指定 platform。
+
+services:
+  rbot:
+    image: yangwudong/java_oci_manage:latest
+    container_name: rbot
+    restart: unless-stopped
+    ports:
+      - "9527:9527"          # 主机端口:容器端口。改左边即可，如 "8888:9527"
+    environment:
+      TZ: Asia/Shanghai      # 时区，影响日志和定时任务
+      # MODEL: local         # 默认 local（无公网IP模式）。留空 MODEL: 切回端口模式
+      # PORT: "9527"         # 改端口时容器端口也要同步，如 PORT: "8888" + "8888:8888"
+    volumes:
+      - ./rbot-data:/app     # 唯一持久化挂载点：配置/私钥/证书/任务全在这
+    # healthcheck 已内置在镜像，无需重复配置

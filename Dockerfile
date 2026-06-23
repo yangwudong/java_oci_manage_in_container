@@ -6,6 +6,11 @@
 # 无任何动态库依赖。本 Dockerfile 用 alpine 作为基础，仅提供运行时所需的
 # ca-certificates / wget / tzdata。
 #
+# 路径设计（重要）：
+#   /opt/rbot  —— 镜像内置只读区：二进制 r_client + 配置模板。永不被挂载覆盖。
+#   /app       —— 用户数据区（挂载卷）：client_config、*.pem、data/、.task/。
+#   这样 docker run -v host:/app 不会盖掉镜像里的二进制。
+#
 # 多架构说明（与上游安装脚本的兼容性检测逻辑一致）：
 #   - linux/amd64 -> gz_client_bot_x86_compatible.tar.gz
 #       （不用 gz_client_bot_x86.tar.gz，后者需 AVX/AVX2/SSE4.2，
@@ -24,7 +29,9 @@ ARG TARGETARCH
 RUN apk add --no-cache ca-certificates wget tzdata \
     && update-ca-certificates
 
-WORKDIR /app
+# 镜像内置只读区：二进制与模板放这里，绝不被用户挂载卷覆盖。
+RUN mkdir -p /opt/rbot
+WORKDIR /opt/rbot
 
 # 下载并解压上游二进制。
 # 注意：上游每个 release 都保留历史包，因此版本化的 URL 可长期稳定访问。
@@ -41,42 +48,48 @@ RUN case "$TARGETARCH" in \
     && if [ ! -f /tmp/pkg/r_client ]; then \
            echo "package missing r_client" >&2; exit 1; \
        fi \
-    && mv /tmp/pkg/r_client /app/r_client \
-    && chmod +x /app/r_client \
-    # 上游模板仅作首次初始化用，真正生效的是 entrypoint 复制的那份
-    # 优先用包内 client_config，缺失则用仓库内的模板兜底
+    && mv /tmp/pkg/r_client /opt/rbot/r_client \
+    && chmod +x /opt/rbot/r_client \
+    # 上游模板用于首次初始化（entrypoint 复制到 /app）
     && if [ -f /tmp/pkg/client_config ]; then \
-           cp -f /tmp/pkg/client_config /app/client_config.template; \
+           cp -f /tmp/pkg/client_config /opt/rbot/client_config.template; \
        fi \
     && rm -rf /tmp/pkg /tmp/pkg.tar.gz
 
 # 仓库内模板作为 fallback：若上游包未携带 client_config，则用它。
-COPY client_config.template /app/client_config.repo.template
-RUN if [ ! -f /app/client_config.template ]; then \
-        cp -f /app/client_config.repo.template /app/client_config.template; \
+COPY client_config.template /opt/rbot/client_config.repo.template
+RUN if [ ! -f /opt/rbot/client_config.template ]; then \
+        cp -f /opt/rbot/client_config.repo.template /opt/rbot/client_config.template; \
     fi \
-    && rm -f /app/client_config.repo.template
+    && rm -f /opt/rbot/client_config.repo.template
 
 # 复制入口脚本
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# 运行时数据目录（挂载卷会覆盖，这里只建空目录避免首次启动报错）
-RUN mkdir -p /app/data /app/.task
+# 用户数据区：挂载卷的目标。容器内以该目录为工作目录运行。
+WORKDIR /app
+VOLUME ["/app"]
 
 # 默认 HTTPS 端口（上游固定）
 EXPOSE 9527
 
 # 健康检查：上游自签 HTTPS，必须忽略证书校验。
 # --spider 仅探测可达性，不下载 body。
+# 健康检查：上游自签 HTTPS，必须忽略证书校验。
+# 注意用根路径 / 而非 /health —— 实测 /health 端点未登录时返回 401，
+# 而 wget --spider 会把 4xx 当失败 → 容器被误判 unhealthy（群晖上尤为明显）。
+# 根路径 / 返回 302(重定向到登录页)，wget --spider 视为成功，端口活着即健康。
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD wget --no-check-certificate -q --spider --timeout=5 \
-        "https://127.0.0.1:${PORT:-9527}/radiance-bot-client/roc/api/client/health" \
+        "https://127.0.0.1:${PORT:-9527}/" \
         || exit 1
 
 # 容器内默认以非 root 运行更安全，但上游二进制在端口模式下需要绑定 9527（>1024 无需特权），
 # local 模式仅出站连接，因此非 root 完全够用。
-RUN addgroup -S rbot && adduser -S -G rbot -h /app rbot \
+# 注意 /app 是挂载卷，宿主侧需保证该 uid(1000) 可读写，或放宽挂载目录权限。
+RUN addgroup -S rbot && adduser -S -G rbot -h /app -u 1000 rbot \
+    && mkdir -p /app \
     && chown -R rbot:rbot /app
 USER rbot
 

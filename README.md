@@ -97,11 +97,22 @@ oci=end
 |---|---|
 | `client_config` | 主配置（含 API 凭据，最重要） |
 | `*.pem` | 甲骨文 API 私钥 |
-| `data/` | 程序生成的自签 SSL 证书 |
+| `data/` | 运行时数据目录 |
 | `.task/` | 任务数据 |
 | `log_r_client.log` | 运行日志 |
 
 升级镜像时这些文件随挂载目录保留，**不会丢失**。
+
+### 路径架构（重要）
+
+为避免挂载卷覆盖镜像内的二进制，容器内分两个目录：
+
+| 路径 | 说明 | 是否挂载 |
+|---|---|---|
+| `/opt/rbot` | 镜像内置只读区：二进制 `r_client` + 配置模板 | ❌ 永不挂载 |
+| `/app` | 用户数据区：配置/私钥/任务/日志 | ✅ 挂载到这里 |
+
+> **只需挂载 `/app`**。二进制随镜像升级，不会也不应被宿主目录覆盖。
 
 ---
 
@@ -120,6 +131,35 @@ docker run -d --name rbot -p 8888:8888 -v /your/path:/app \
   -e PORT=8888 -e MODEL= -e TZ=Asia/Shanghai \
   yangwudong/java_oci_manage:latest
 ```
+
+---
+
+## 🔒 HTTPS / SSL 证书
+
+**r_client 内置完整的 ACME 自动证书功能，无需手动挂载证书文件。**
+
+通过 Web 面板 `设置 → SSL Certificate (ACME)` 配置，支持两种签发方式：
+
+| 方式 | 验证 | 前置条件 | 适合场景 |
+|---|---|---|---|
+| **域名模式 (DNS-01)** | Cloudflare DNS | `client_config` 填 `cf_email` + `cf_account_key`，**无需开 80 端口** | ✅ NAS / 内网（推荐） |
+| **IP 模式 (HTTP-01)** | HTTP | 签发时临时开 80 端口 | 公网 IP 服务器 |
+
+### NAS 上用 acme 证书的正确做法
+
+1. 先在 `client_config` 填 Cloudflare 凭据（域名要托管在 Cloudflare）：
+   ```ini
+   cf_email=你的cloudflare登录邮箱
+   cf_account_key=你的Global API Key
+   ```
+2. 重启容器：`docker restart rbot`
+3. 浏览器访问 `https://<NAS的IP>:9527/radiance-bot-client` 登录 Web 面板（首次有自签证书警告，点继续）
+4. 进 `设置 → SSL Certificate (ACME)`，勾选 Enable，填域名 + 通知邮箱
+5. r_client 自动通过 DNS-01 向 Let's Encrypt 申请并续期证书
+
+> 这样 r_client 直接对外提供受信任的 HTTPS，浏览器显示绿锁，**不需要反向代理，也不用挂载任何证书文件**。
+>
+> 如果你更倾向用群晖自带反向代理 / Nginx Proxy Manager 统一管理证书，那让 r_client 走 HTTP、由反代终结 SSL 即可——两种方式二选一。
 
 ---
 

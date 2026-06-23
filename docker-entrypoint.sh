@@ -2,10 +2,14 @@
 # ============================================================================
 # Radiance OCI Bot 客户端容器入口脚本
 #
+# 路径设计：
+#   /opt/rbot  —— 镜像内置只读区：r_client(二进制) + client_config.template
+#   /app       —— 用户数据区（挂载卷）：client_config、*.pem、data/、.task/
+#
 # 职责：
 #   1. 首次启动时从模板生成 client_config（仅当挂载卷里不存在时）
 #   2. 创建数据目录 data/（SSL 证书）、.task/（任务）
-#   3. 通过环境变量 MODEL / PORT 覆盖配置（便于 docker run / 群晖 UI 修改）
+#   3. 通过环境变量 MODEL / PORT 覆盖配置
 #   4. exec 启动 r_client，让二进制成为 PID 1 接收 SIGTERM 优雅退出
 #
 # 兼容 Alpine busybox 的 /bin/sh（不使用 bash 特有语法）。
@@ -13,12 +17,25 @@
 
 set -eu
 
+# 镜像内置只读区（绝不挂载覆盖）
+BIN_DIR="/opt/rbot"
+TEMPLATE="${BIN_DIR}/client_config.template"
+BINARY="${BIN_DIR}/r_client"
+
+# 用户数据区（挂载卷）
 APP_DIR="/app"
 CONFIG="${APP_DIR}/client_config"
-TEMPLATE="${APP_DIR}/client_config.template"
-BINARY="${APP_DIR}/r_client"
 
 cd "${APP_DIR}"
+
+# ----------------------------------------------------------------------------
+# 0. 健全性检查：二进制必须在（若被挂载盖掉会立刻暴露）
+# ----------------------------------------------------------------------------
+if [ ! -x "${BINARY}" ]; then
+    echo "[entrypoint] 致命错误: 找不到可执行二进制 ${BINARY}" >&2
+    echo "[entrypoint] 请确认你没有把宿主目录挂载到 ${BIN_DIR}，只应挂载到 ${APP_DIR}(/app)" >&2
+    exit 1
+fi
 
 # ----------------------------------------------------------------------------
 # 1. 首次初始化配置文件
@@ -62,7 +79,7 @@ fi
 
 PORT="${PORT:-9527}"
 
-echo "[entrypoint] 启动 r_client (model=$(grep '^model=' "${CONFIG}" 2>/dev/null || echo unset), port=${PORT})"
+echo "[entrypoint] 启动 r_client (model=$(grep '^model=' "${CONFIG}" 2>/dev/null | head -1 | cut -d= -f2- || echo unset), port=${PORT})"
 
 # ----------------------------------------------------------------------------
 # 4. 启动
